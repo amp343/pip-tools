@@ -64,11 +64,13 @@ class PipCommand(pip.basecommand.Command):
               help="Generate pip 8 style hashes in the resulting requirements file.")
 @click.option('--max-rounds', default=10,
               help="Maximum number of rounds before resolving the requirements aborts.")
+@click.option('-ex', '--extras-require', multiple=True,
+              help="setup.py `extras_require` sets to compile")
 @click.argument('src_files', nargs=-1, type=click.Path(exists=True, allow_dash=True))
 def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
         cert, client_cert, trusted_host, header, index, emit_trusted_host, annotate,
         upgrade, upgrade_packages, output_file, allow_unsafe, generate_hashes,
-        src_files, max_rounds):
+        src_files, max_rounds, extras_require):
     """Compiles requirements.txt from requirements.in specs."""
     log.verbose = verbose
 
@@ -159,6 +161,9 @@ def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
     constraints = []
     for src_file in src_files:
         is_setup_file = os.path.basename(src_file) == 'setup.py'
+        if not is_setup_file and extras_require:
+            raise click.BadParameter(("--extras-require is not valid when "
+                                      "the src file is not a setup.py"))
         if is_setup_file or src_file == '-':
             # pip requires filenames and not files. Since we want to support
             # piping from stdin, we need to briefly save the input from stdin
@@ -168,7 +173,15 @@ def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
             if is_setup_file:
                 from distutils.core import run_setup
                 dist = run_setup(src_file)
-                tmpfile.write('\n'.join(dist.install_requires))
+                reqs = dist.install_requires
+                for extra in extras_require:
+                    if not extra in dist.extras_require:
+                        raise click.BadParameter(("'{}' is not a valid --extras-require "
+                                                  "value; it does not exist in setup.py "
+                                                  "extras_require").format(extra))
+                    reqs += dist.extras_require[extra]
+                tmpfile.write('\n'.join(reqs))
+
             else:
                 tmpfile.write(sys.stdin.read())
             tmpfile.flush()
@@ -232,7 +245,8 @@ def cli(verbose, dry_run, pre, rebuild, find_links, index_url, extra_index_url,
                           default_index_url=repository.DEFAULT_INDEX_URL,
                           index_urls=repository.finder.index_urls,
                           trusted_hosts=pip_options.trusted_hosts,
-                          format_control=repository.finder.format_control)
+                          format_control=repository.finder.format_control,
+                          extras_require=extras_require)
     writer.write(results=results,
                  unsafe_requirements=resolver.unsafe_constraints,
                  reverse_dependencies=reverse_dependencies,
